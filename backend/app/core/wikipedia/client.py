@@ -14,75 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from dataclasses import dataclass, field
 from typing import Any, Iterable
 from urllib.parse import quote
 
 import httpx
 
-from ..config import Settings, get_settings
+from ...config import Settings, get_settings
+from .models import MIN_ARTICLE_CHARS, WikiArticle, WikipediaError
+from .parsing import lead_paragraph, parse_sections
+from .rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
-
-# A page whose extract is shorter than this is a stub/redirect artefact and not
-# worth indexing.
-MIN_ARTICLE_CHARS = 400
-
-
-class WikipediaError(RuntimeError):
-    """Raised when the MediaWiki API returns an error we cannot recover from."""
-
-
-@dataclass(slots=True)
-class WikiSection:
-    """A ``== heading ==`` block of an article, with its anchor."""
-
-    title: str
-    level: int
-    text: str
-    path: list[str] = field(default_factory=list)
-
-    @property
-    def anchor(self) -> str:
-        """URL fragment MediaWiki uses for this section heading."""
-        # Parentheses are left literal, matching how Wikipedia renders its own links.
-        return quote(self.title.replace(" ", "_"), safe="()")
-
-
-@dataclass(slots=True)
-class WikiArticle:
-    page_id: int
-    title: str
-    lang: str
-    url: str
-    summary: str
-    sections: list[WikiSection]
-    is_disambiguation: bool = False
-    langlinks: dict[str, str] = field(default_factory=dict)
-
-    @property
-    def char_count(self) -> int:
-        return sum(len(s.text) for s in self.sections)
-
-
-class RateLimiter:
-    """Simple async token bucket shared by every request from this client."""
-
-    def __init__(self, rate_per_second: float) -> None:
-        self._rate = max(rate_per_second, 0.5)
-        self._interval = 1.0 / self._rate
-        self._lock = asyncio.Lock()
-        self._next_slot = 0.0
-
-    async def acquire(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            wait_for = self._next_slot - now
-            if wait_for > 0:
-                await asyncio.sleep(wait_for)
-                now = time.monotonic()
-            self._next_slot = now + self._interval
 
 
 class WikipediaClient:
@@ -333,7 +275,7 @@ class WikipediaClient:
             title=page["title"],
             lang=lang,
             url=page.get("fullurl") or self.article_url(lang, page["title"]),
-            summary=_lead_paragraph(extract),
+            summary=lead_paragraph(extract),
             sections=parse_sections(extract),
             is_disambiguation=is_disambig,
             langlinks={ll["lang"]: ll["title"] for ll in page.get("langlinks", [])},
@@ -421,81 +363,3 @@ class WikipediaClient:
         ranked = sorted(positions, key=positions.get)  # type: ignore[arg-type]
         # Anything the extract never mentioned goes last, order preserved.
         return ranked + [t for t in link_titles if t not in positions]
-
-
-def _lead_paragraph(extract: str) -> str:
-    """First paragraph before any ``== Heading ==``."""
-    head = extract.split("\n==", 1)[0].strip()
-    for para in head.split("\n"):
-        para = para.strip()
-        if len(para) > 80:
-            return para
-    return head[:600]
-
-
-def parse_sections(extract: str) -> list[WikiSection]:
-    """Split a plain-text extract into sections using its ``==`` headings.
-
-    The text before the first heading becomes an implicit "Introduction"
-    section, which is where most short factual answers live.
-    """
-    sections: list[WikiSection] = []
-    current = {"title": "Introduction", "level": 1, "ancestors": []}
-    current_lines: list[str] = []
-    # Tracks the heading hierarchy so each section knows its parent path.
-    stack: list[tuple[int, str]] = []
-
-    def flush() -> None:
-        text = "\n".join(current_lines).strip()
-        if not text:
-            return
-        sections.append(
-            WikiSection(
-                title=str(current["title"]),
-                level=int(current["level"]),
-                text=text,
-                path=[*current["ancestors"], str(current["title"])],
-            )
-        )
-
-    for raw_line in extract.splitlines():
-        line = raw_line.strip()
-        if line.startswith("==") and line.endswith("==") and len(line) > 4:
-            flush()
-            equals = len(line) - len(line.lstrip("="))
-            level = max(equals - 1, 1)
-            while stack and stack[-1][0] >= level:
-                stack.pop()
-            current = {
-                "title": line.strip("=").strip(),
-                "level": level,
-                "ancestors": [t for _, t in stack],
-            }
-            current_lines = []
-            stack.append((level, str(current["title"])))
-        else:
-            current_lines.append(raw_line)
-
-    flush()
-
-    # Drop boilerplate tail sections that carry no answerable content. The check
-    # walks the whole heading path, not just the leaf: "Further reading >
-    # Articles" is still a bibliography, and left in it wastes retrieval slots
-    # on citation lists.
-    noise = {
-        "references",
-        "external links",
-        "see also",
-        "further reading",
-        "notes",
-        "bibliography",
-        "sources",
-        "citations",
-        "footnotes",
-        "works cited",
-    }
-    return [
-        s
-        for s in sections
-        if not any(part.strip().lower() in noise for part in s.path)
-    ]
