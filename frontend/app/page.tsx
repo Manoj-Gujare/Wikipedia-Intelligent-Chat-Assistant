@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChatWindow } from "@/components/ChatWindow";
-import { LoginScreen } from "@/components/LoginScreen";
+import { ChatScreen } from "@/components/chat/ChatScreen";
+import { LoginScreen } from "@/components/auth/LoginScreen";
 import { startSession } from "@/lib/api";
 import { clearCredentials, loadCredentials } from "@/lib/credentials";
 import type { Credentials, Session } from "@/lib/types";
@@ -63,7 +63,7 @@ export default function Home() {
   }
 
   return (
-    <ChatWindow
+    <ChatScreen
       credentials={credentials}
       session={session}
       onCredentialsChange={setCredentials}
