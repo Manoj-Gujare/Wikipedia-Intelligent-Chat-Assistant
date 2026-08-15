@@ -1,0 +1,38 @@
+/* --------------------------------------------------------- answer footer */
+
+.answer-footer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--border);
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.answer-footer:hover,
+.answer-footer.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* A reply with no sources still shows what it cost, but nothing opens, so it
+   drops the affordances that promise a panel: no dashed underline, no pointer,
+   no hover. */
+.answer-footer-plain,
+.answer-footer-plain:hover {
+  border-bottom: none;
+  cursor: default;
+  color: var(--text-muted);
+  margin-bottom: 0;
+}
+
+.answer-footer-time {
+  opacity: 0.7;
+}
+

@@ -1,0 +1,65 @@
+/* --------------------------------------------------------- disambiguation */
+
+.disambiguation {
+  margin-top: 10px;
+}
+
+.disambiguation-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.disambiguation-option {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.disambiguation-pick {
+  flex: 1;
+  text-align: left;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text);
+  background: none;
+  border: none;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+
+.disambiguation-pick:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.disambiguation-pick:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.disambiguation-link {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-left: 1px solid var(--border);
+}
+
+.disambiguation-link:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+.timings {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
