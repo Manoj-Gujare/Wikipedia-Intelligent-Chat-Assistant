@@ -10,7 +10,7 @@ from typing import AsyncIterator
 from langchain_core.messages import HumanMessage
 
 from ..core.cache import TTLCache, get_cache
-from ..core.rag import turn_meta
+from ..core.sources import turn_meta
 from ..models import (
     AgentTrace,
     ArticleLink,
