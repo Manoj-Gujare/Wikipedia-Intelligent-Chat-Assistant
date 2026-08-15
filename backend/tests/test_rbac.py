@@ -13,7 +13,7 @@ import time
 import jwt
 import pytest
 
-from app.api.auth import RequestIdentity
+from app.api.dependencies import RequestIdentity
 from app.config import Settings
 from app.core.retriever import _may_read
 from app.core.tokens import ALGORITHM, InvalidToken, ROLE_USER, issue_token, verify_token
