@@ -24,11 +24,11 @@ Each core requirement from the assignment, and where it is implemented.
 
 | # | Requirement | Where | Status |
 | - | ----------- | ----- | ------ |
-| 1 | **Web crawling** — official MediaWiki API, various topics/categories | `core/wikipedia.py`, `scripts/ingest.py`, `scripts/seeds.py` | Rate-limited, `maxlag`-aware, resumable; ~300 articles across 6 domains |
+| 1 | **Web crawling** — official MediaWiki API, various topics/categories | `core/wikipedia/`, `scripts/ingest.py`, `scripts/seeds.py` | Rate-limited, `maxlag`-aware, resumable; ~300 articles across 6 domains |
 | 2 | **Knowledge base** — vector DB, chunking strategy for long articles | `core/vector_store.py` (ChromaDB), `core/chunker.py` | Section-aware chunking, 350-token windows, 60-token overlap, per-language collections |
 | 3 | **Chat interface** — natural language, multi-turn context and history | `frontend/`, `core/conversation.py` | Next.js chat UI, SSE streaming, SQLite-persisted threads that survive restarts |
-| 4 | **RAG pipeline** — accurate, cited responses from Wikipedia | `graph/` (LangGraph), `core/rag.py`, `core/retriever.py` | **Agentic**: the model picks its evidence source per turn (indexed corpus / live MediaWiki / the conversation) and may retry against a different one; MMR retrieval, grounded prompt, citations bound to actually-used sources |
-| 5 | **Smart routing** — article URLs, multiple languages, disambiguation | `core/retriever.py`, `graph/nodes.py` | Section-deep URLs; **English + Spanish indexed** (9,134 + 3,578 chunks), other editions plumbed but unpopulated — see [Languages](#languages); disambiguation as a first-class branch, with a live MediaWiki lookup when the index has no disambiguation page |
+| 4 | **RAG pipeline** — accurate, cited responses from Wikipedia | `graph/` (LangGraph), `core/prompts.py`, `core/citations.py`, `core/retriever.py` | **Agentic**: the model picks its evidence source per turn (indexed corpus / live MediaWiki / the conversation) and may retry against a different one; MMR retrieval, grounded prompt, citations bound to actually-used sources |
+| 5 | **Smart routing** — article URLs, multiple languages, disambiguation | `core/retriever.py`, `graph/nodes/` | Section-deep URLs; **English + Spanish indexed** (9,134 + 3,578 chunks), other editions plumbed but unpopulated — see [Languages](#languages); disambiguation as a first-class branch, with a live MediaWiki lookup when the index has no disambiguation page |
 | 6 | **Key metrics** — <3s, >90% accuracy, section-linked citations | `scripts/evaluate.py` | **1.65–1.90s median single-turn, 2.49–2.92s median follow-up / 100% accuracy / 100% citation rate** — ranges are the spread across repeated runs against a live API; see [Metrics](#metrics) |
 
 Legal safety is addressed in [Wikipedia compliance](#wikipedia-compliance): official
@@ -805,7 +805,8 @@ cd backend
 python -m pytest
 ```
 
-247 tests, no network and no API key required. Each graph node is tested in isolation
+253 tests, no network and no API key required. `tests/graph/` mirrors
+`app/graph/nodes/` one module per node. Each graph node is tested in isolation
 against a stub services object that records what it was asked to do — which is how
 the routing is pinned: `test_a_greeting_reaches_end_without_retrieval_or_generation`
 asserts the visited-node list is exactly `["gate", "agent", "direct_responder"]`, and
@@ -1002,31 +1003,67 @@ backend/
     main.py              FastAPI app, CORS, lifespan (compiles graph, warms index)
     config.py            settings (.env)
     models.py            request/response schemas
-    api/routes.py        chat, stream, conversations, stats, health
+    api/
+      dependencies.py    RequestIdentity and the require_* FastAPI dependencies
+      routers/           one router per resource, assembled in __init__.py
+        auth.py            register, login, password change, key validation
+        chat.py            session bootstrap, blocking chat, SSE stream
+        conversations.py   list, restore, clear
+        knowledge_base.py  inspect, ingest, add articles, job status
+        system.py          stats, health
     graph/
       state.py           ChatState TypedDict threaded through every node
-      nodes.py           the seven nodes + per-node latency instrumentation
       build.py           StateGraph wiring, conditional edges, the agent loop
-      services.py        dependencies nodes call into (stubbable in tests)
       runner.py          drives one turn; blocking and SSE-streaming entry points
+      services.py        dependencies nodes call into (stubbable in tests)
+      history.py         which turns a decision sees; small talk filtered out
+      references.py      whether a message leans on the turn before it
+      nodes/             one module per node
+        gate.py            seeds the turn's budget
+        agent.py           picks the tool for this hop, resolves the subject
+        speculation.py     retrieval raced against the decision call
+        tool_executor.py   runs the tool, shapes results, the hop gate
+        clarification.py   asks which entity was meant
+        history_answerer.py  answers from the conversation itself
+        generator.py       grounded generation with citations
+        direct_responder.py  emits the agent's own reply, no second call
+        timing.py          per-node latency instrumentation
     core/
-      wikipedia.py       MediaWiki client: rate limiting, maxlag, section parsing
+      wikipedia/         MediaWiki client, article models, parsing, rate limiting
       chunker.py         section-aware chunking with token overlap
       embeddings.py      batched OpenAI embeddings with backoff
       vector_store.py    ChromaDB adapter (per-language collections)
       retriever.py       semantic search, MMR, disambiguation, live fallback
-      rag.py             prompts, tool schemas, grounding rules, citation binding
+      prompts.py         system and agent prompts, context block, languages
+      agent_tools.py     tool schemas, tool names, tool-call parsing
+      citations.py       holds each sentence to the chunk it cites
+      sources.py         cited chunks to sources and article links
+      refusals.py        subject extraction and not-covered wording
+      accounts.py        registration, sign-in, password hashing
+      tokens.py          session token issue and verification
       ratelimit.py       failed-login throttling
       conversation.py    multi-turn memory, SQLite-persisted, TTL eviction
+      db.py              one shared SQLite connection behind one lock
       cache.py           TTL answer cache
   scripts/
     ingest.py            crawler + indexer CLI
     seeds.py             seed topics and categories
     evaluate.py          accuracy + latency benchmark
-  tests/                 pytest suite (247 tests, no network or API key needed)
+  tests/                 pytest suite (253 tests, no network or API key needed)
+    graph/               mirrors app/graph/nodes/, one test module per node
 
 frontend/
-  app/                   Next.js App Router entry, global styles
-  components/            chat window, message bubbles, sources, routing, disambiguation
-  lib/                   SSE client and shared types
+  app/
+    page.tsx             login screen or chat screen
+    styles/              one stylesheet per area; globals.css imports them in order
+  components/
+    chat/                ChatScreen, header, message list, composer, sidebar
+    auth/                login screen and the API-key bar
+    sources/             the evidence panel
+    knowledge-base/      article management
+  hooks/                 useConversation, useConversationList, useArticleIngest
+  lib/
+    api/                 backend client, one module per resource
+    types.ts             shared types
+    languages.ts         language editions the UI offers
 ```
