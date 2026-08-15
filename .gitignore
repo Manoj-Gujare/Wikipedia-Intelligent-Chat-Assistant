@@ -14,8 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Root-anchored: an unanchored `lib/` matches at any depth and silently
+# excluded `frontend/lib/`, so a fresh clone had no api.ts/types.ts and
+# could not build.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -216,3 +219,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Wikipedia Intelligent Chat Assistant ---
+# Frontend
+node_modules/
+.next/
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# Local env files (Next.js reads .env.local; never commit real keys)
+.env.local
+.env*.local
+
+# Backend: local vector index (rebuild with `python -m scripts.ingest`)
+backend/data/
+
+# Local design notes from the restructure; not part of the project.
+docs/superpowers/
