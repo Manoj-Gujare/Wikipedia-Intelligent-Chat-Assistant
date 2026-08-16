@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     # 0.7 was the first guess and it cut through the safe group, rejecting
     # "Marie Curie discoveries" against "...what did she discover?" purely
     # because the tokeniser does not stem.
+    #
+    # Do not "fix" that by stemming. It was tried: it reclassifies the one
+    # remaining miss on the smoke path from 0.50 to 0.75, and that reuse
+    # produces a refusal where the second search produced a cited answer. The
+    # slack between the two populations is standing in for retrieval quality,
+    # which word overlap cannot measure — see `_similar`.
     agent_speculation_reuse_threshold: float = 0.6
     # Live-search grounding fetches this many articles' lead sections.
     agent_live_articles: int = 2

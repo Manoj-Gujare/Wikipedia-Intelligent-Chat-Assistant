@@ -26,10 +26,21 @@ _ELLIPTICAL_OPENERS = (
 )
 
 
-# A capitalised word is treated as a named subject. Three letters minimum keeps
-# acronym-shaped noise out; the search deliberately skips the first word, which
-# is capitalised in every sentence and says nothing about the subject.
-_PROPER_NOUN = re.compile(r"\b[A-Z][a-z]{2,}")
+# A capitalised word used to be required here, as a proxy for "the message
+# names its own subject". It was measured out: capitalisation is a property of
+# how someone types, not of whether their question stands alone. In the running
+# app "i want to know about the albert einstein" and "what is machine learning"
+# both failed it and paid 0.36-1.29s of serial retrieval, while the same
+# questions in the eval suite passed purely because the suite is written in
+# textbook capitalisation — so the benchmark could not see the loss.
+#
+# What remains is the part that was doing real work: not elliptical, not
+# referential, and long enough to embed. Those describe a message that does not
+# lean on the previous turn, which is exactly what speculation needs. Dropping
+# the proxy admits some genuinely elliptical messages ("What is the capital?"),
+# and that is affordable *here specifically* — this function only decides
+# whether to launch a parallel embedding. Whether the parked result is ever
+# used is `speculation._similar`'s decision, and it is unchanged.
 
 
 # Below this, a question is almost certainly leaning on the previous turn
@@ -85,7 +96,4 @@ def looks_self_contained(message: str) -> bool:
     if any(word in _REFERENTIAL for word in re.findall(r"[a-z']+", lowered)):
         return False
 
-    words = text.split()
-    if len(words) < _MIN_SELF_CONTAINED_WORDS:
-        return False
-    return bool(_PROPER_NOUN.search(" ".join(words[1:])))
+    return len(text.split()) >= _MIN_SELF_CONTAINED_WORDS

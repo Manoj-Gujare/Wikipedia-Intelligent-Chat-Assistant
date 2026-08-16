@@ -60,6 +60,17 @@ def _similar(speculated: str, chosen: str, threshold: float) -> bool:
     scores that pair 1.0, while a genuine rewrite still fails: "what about his
     wife?" -> "Albert Einstein wife" shares only *wife*, or 0.33. Word sets, no
     stopword list, so it behaves the same in every language the index holds.
+
+    Deliberately does *not* stem, though `citations._term_present` does. Making
+    membership plural-tolerant here was tried and measured: it turned the one
+    remaining miss on the smoke path ("about black hole" -> "who found it",
+    parked against the agent's "who discovered black holes") from 0.50 into
+    0.75, saved the ~0.5s second search on every run — and turned a cited
+    answer into a refusal on every run, because the stitched query retrieves
+    general black-hole chunks and the discovery history only surfaces for the
+    agent's own wording. The words were all covered; the *chunks* were not.
+    That gap is the thing this function cannot see, so the slack in the
+    threshold is what stands in for it.
     """
     parked = set(re.findall(r"[\w']+", speculated.lower()))
     wanted = set(re.findall(r"[\w']+", chosen.lower()))

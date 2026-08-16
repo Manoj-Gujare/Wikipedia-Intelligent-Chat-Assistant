@@ -101,6 +101,69 @@ async def test_a_resolved_rewrite_never_reuses_the_speculation(raw, chosen):
 
 
 @pytest.mark.asyncio
+async def test_an_accepted_false_positive_is_still_discarded_downstream():
+    """The backstop that makes a permissive `looks_self_contained` affordable.
+
+    Dropping the capitalised-proper-noun proxy lets genuinely elliptical
+    messages speculate ("What is the capital?" — of what?). That is only
+    acceptable because reuse is a separate decision: once the agent resolves
+    the subject the parked chunks are for a different question, `_similar`
+    scores 0.50 against a 0.60 threshold, and they are thrown away. The message
+    costs one wasted embedding and never a wrong answer.
+    """
+    services = StubServices(result=RetrievalResult(hits=[_hit()]))
+    parked = asyncio.create_task(services.retrieve("What is the capital?"))
+
+    result = await tool_executor(
+        _state(
+            question="What is the capital?",
+            pending_tool="search_knowledge_base",
+            tool_query="France capital",
+            speculative=parked,
+            speculative_query="What is the capital?",
+        ),
+        services,
+    )
+
+    assert result["speculation_hit"] is False
+    assert services.retrieve_calls[-1] == "France capital"
+
+
+@pytest.mark.asyncio
+async def test_a_narrower_question_about_the_same_subject_does_not_reuse():
+    """The case that looks like a false miss and is not.
+
+    "about black hole" -> "who found it" parks the stitched message and the
+    agent asks for "who discovered black holes". Every content word of the
+    agent's query is already covered — only `hole`/`holes` separates them — so
+    this scores 0.50 and reads like the tokeniser being too literal. Making
+    membership plural-tolerant does lift it to 0.75 and does save the ~0.5s
+    second search.
+
+    It also produces a refusal, on every run measured: the stitched query
+    retrieves general black-hole chunks, and the discovery history the question
+    actually asks for only surfaces for the agent's own wording. Word overlap
+    cannot see that, so the miss must stay a miss.
+    """
+    services = StubServices(result=RetrievalResult(hits=[_hit()]))
+    parked = asyncio.create_task(services.retrieve("about black hole who found it"))
+
+    result = await tool_executor(
+        _state(
+            question="who found it",
+            pending_tool="search_knowledge_base",
+            tool_query="who discovered black holes",
+            speculative=parked,
+            speculative_query="about black hole who found it",
+        ),
+        services,
+    )
+
+    assert result["speculation_hit"] is False
+    assert services.retrieve_calls[-1] == "who discovered black holes"
+
+
+@pytest.mark.asyncio
 async def test_discarding_a_speculation_leaves_no_unretrieved_exception():
     """`.exception()` on a cancelled task raises CancelledError, a BaseException.
 
