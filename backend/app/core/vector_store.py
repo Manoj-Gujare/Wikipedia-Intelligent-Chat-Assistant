@@ -254,14 +254,22 @@ class VectorStore:
         collection = self._collection(
             lang, intro=(section_title == INTRO_SECTION), namespace=namespace
         )
-        if collection.count() == 0:
-            return []
 
-        result = collection.query(
-            query_embeddings=[embedding],
-            n_results=top_k,
-            include=include,
-        )
+        # This was `if collection.count() == 0: return []`, which cost a
+        # measured 11ms per call and ran on both pools of every retrieval — the
+        # majority of the 35ms Chroma spends on a turn, paid to ask a question
+        # whose answer is "no" only before anything has been ingested. Querying
+        # an empty collection is not an error in Chroma; it returns no rows, and
+        # a malformed one raises, which the caller already has to tolerate.
+        try:
+            result = collection.query(
+                query_embeddings=[embedding],
+                n_results=top_k,
+                include=include,
+            )
+        except Exception:  # noqa: BLE001 - an unusable collection has no hits
+            logger.debug("Query against %r failed; treating as empty", collection.name)
+            return []
 
         ids = (result.get("ids") or [[]])[0]
         documents = (result.get("documents") or [[]])[0]
