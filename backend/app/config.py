@@ -19,11 +19,15 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
 
-    # Measured on the 20-case suite (see scripts/evaluate.py):
-    #   gpt-4.1-nano  95% accuracy, p50 1.8s, 1/20 over 3s   <- both targets, with margin
-    #   gpt-4.1-mini 100% accuracy, p50 2.5s, 3/20 over 3s   <- accuracy-max, latency grazes
-    # nano is the default because the specification asks for >90% accuracy AND
-    # <3s; set CHAT_MODEL=gpt-4.1-mini to trade latency for the last 5%.
+    # Measured 2026-08-16 on the 26-case suite (see scripts/evaluate.py):
+    #   gpt-4.1-nano  100% accuracy, p50 2.22-2.55s, follow-up p50 2.04-2.67s
+    #   gpt-4.1-mini   95% accuracy, p50 2.58s,      follow-up p50 4.85s
+    # nano is the default on both counts, which is not what one would guess.
+    # mini writes longer answers (52 words at the median against nano's 40) and
+    # latency is roughly linear in answer length, so it misses the 3s budget on
+    # every follow-up while also scoring lower — the extra words dilute rather
+    # than add. Treat the accuracy gap as noise at this suite size; the latency
+    # gap is not noise.
     chat_model: str = "gpt-4.1-nano"
     # The agent's tool-decision call. It sits on the critical path of every
     # turn, so it is a small model emitting one tool call — not the model that
@@ -97,9 +101,14 @@ class Settings(BaseSettings):
     chunk_size_tokens: int = 350
     chunk_overlap_tokens: int = 60
 
+    # Wikimedia's User-Agent policy asks for a descriptive agent with working
+    # contact details, so the default carries real ones rather than a
+    # placeholder — an unedited checkout is the case most likely to reach
+    # production Wikipedia, and it is the one a placeholder fails.
     wiki_user_agent: str = (
         "WikipediaIntelligentChatAssistant/1.0 "
-        "(https://github.com/your-org/wiki-chat; you@example.com)"
+        "(https://github.com/Manoj-Gujare/Wikipedia-Intelligent-Chat-Assistant; "
+        "manojgujare726@gmail.com)"
     )
     wiki_requests_per_second: float = 8.0
     wiki_max_concurrency: int = 4

@@ -45,13 +45,39 @@ def turn_meta(response: ChatResponse) -> dict | None:
     }
 
 def build_article_links(hits: list[SearchHit], sources: list[Source]) -> list[ArticleLink]:
-    """Smart routing: one deduplicated link per distinct article, cited first."""
+    """Smart routing: one deduplicated link per distinct article, cited first.
+
+    An article the answer never cited is only worth suggesting if it is at
+    least as relevant as the weakest chunk the answer actually relied on. That
+    bar is self-calibrating — it needs no threshold of its own, because the
+    answer has already demonstrated what "relevant enough to use" means for
+    this particular question.
+
+    Without it, every retrieved hit became a suggestion. Retrieval keeps
+    anything above `min_relevance_score` (0.18) and MMR deliberately
+    *diversifies* what survives, so the tail of a good result set is often only
+    loosely on topic — and a private knowledge base widens it further. Observed
+    in the running UI: "who is albert einstein" returned four cited Einstein
+    chunks and then offered *Michael Faraday* and *Sam Altman* as further
+    reading. The answer was correct and well sourced; the routing beside it
+    read as broken, which costs the same trust.
+    """
     cited_titles = {s.title for s in sources}
+    # The weakest evidence the answer leaned on. With no citations there is no
+    # bar to set, and the caller is on the not-covered path anyway.
+    floor = min((s.score for s in sources), default=None)
+
     ordered: list[ArticleLink] = []
     seen: set[str] = set()
 
     for hit in sorted(hits, key=lambda h: (h.title not in cited_titles, -h.score)):
         if hit.title in seen:
+            continue
+        if (
+            floor is not None
+            and hit.title not in cited_titles
+            and hit.score < floor
+        ):
             continue
         seen.add(hit.title)
         ordered.append(

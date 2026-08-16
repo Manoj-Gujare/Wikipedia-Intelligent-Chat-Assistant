@@ -44,6 +44,55 @@ def test_article_links_are_deduplicated_per_article():
     assert [l.title for l in links] == ["Physics", "Optics"]
 
 
+def test_an_uncited_article_weaker_than_the_evidence_used_is_not_suggested():
+    """The bug from the running UI, in miniature.
+
+    "who is albert einstein" answered from four Einstein chunks and then
+    offered *Michael Faraday* and *Sam Altman* as further reading — both
+    retrieved, neither cited, and one of them from a private knowledge base
+    about something else entirely. Retrieval keeps everything above a
+    permissive floor and MMR diversifies what survives, so the tail of a good
+    result set is routinely off topic.
+    """
+    hits = [
+        _hit("Albert Einstein", "Intro", 0.72),
+        _hit("Albert Einstein", "Career", 0.61),
+        _hit("Michael Faraday", "Intro", 0.44),
+        _hit("Sam Altman", "Intro", 0.31),
+    ]
+    sources = build_sources(hits, "A physicist [1]. He worked on quanta [2].")
+
+    links = build_article_links(hits, sources)
+
+    assert [l.title for l in links] == ["Albert Einstein"]
+
+
+def test_an_uncited_article_as_relevant_as_the_evidence_used_is_kept():
+    """The bar is 'as relevant as what the answer used', not 'cited'.
+
+    A genuinely related article that the model simply did not need is still
+    worth routing to — that is the difference between filtering noise and
+    refusing to suggest anything.
+    """
+    hits = [
+        _hit("Black hole", "Intro", 0.80),
+        _hit("Event horizon", "Intro", 0.74),
+        _hit("Tidal downsizing", "Intro", 0.10),
+    ]
+    sources = build_sources(hits, "Nothing escapes [1].")  # floor = 0.80
+
+    links = build_article_links(hits, sources)
+
+    assert "Tidal downsizing" not in [l.title for l in links]
+
+    # Same corpus, but the answer leaned on weaker evidence, so the bar drops
+    # and the related article clears it.
+    sources = build_sources(hits, "Nothing escapes [1]. Its boundary [2].")
+    links = build_article_links(hits, sources)
+
+    assert [l.title for l in links] == ["Black hole", "Event horizon"]
+
+
 def test_cited_articles_are_routed_first():
     hits = [_hit("Optics", "Intro", 0.95), _hit("Physics", "Intro", 0.5)]
     sources = build_sources(hits, "Fact [2].")  # cites Physics, the lower-scoring hit

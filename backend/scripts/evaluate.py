@@ -352,6 +352,15 @@ async def main(argv: list[str] | None = None) -> int:
     latency_ok = full_p50 < TARGET_SECONDS
     over = sum(1 for t in totals if t >= TARGET_SECONDS)
 
+    # The follow-up median is gated too, not merely printed. It used to be
+    # reported with an "OVER TARGET" label that nothing acted on, so a run
+    # could announce a 4.85s follow-up median and still exit 0 — which is
+    # exactly the shape of a benchmark people stop trusting. A multi-turn
+    # answer is a response like any other, and the specification's budget
+    # does not exempt it.
+    follow_up_p50 = statistics.median(follow_up_times) if follow_up_times else 0.0
+    follow_up_ok = not follow_up_times or follow_up_p50 < TARGET_SECONDS
+
     print("\n" + "=" * 68)
     print(f"Accuracy          {accuracy:6.1%}  (target >{TARGET_ACCURACY:.0%})   "
           f"{'OK' if accuracy_ok else 'BELOW TARGET'}")
@@ -377,27 +386,45 @@ async def main(argv: list[str] | None = None) -> int:
     print(f"Agent consulted   {sum(1 for h in hops if h):4d}/{len(hops)} turns")
 
     # Reported separately, never averaged into the headline. A referential
-    # follow-up cannot speculate, so its retrieval runs in series where an
-    # opening question's runs underneath the decision call — blending the two
-    # would hide the slowest path behind the fastest one.
+    # follow-up leans on machinery an opening question never touches, so
+    # blending the two would hide a regression in it behind the easier path.
     if follow_up_times:
-        fu_p50 = statistics.median(follow_up_times)
         fu_over = sum(1 for t in follow_up_times if t >= TARGET_SECONDS)
         print("-" * 68)
         print(
             f"Follow-up acc.    {follow_up_correct / len(follow_up_times):6.1%}  "
             f"({follow_up_correct}/{len(follow_up_times)} multi-turn cases)"
         )
-        print(f"Follow-up    p50  {fu_p50:6.2f}s  (target <{TARGET_SECONDS:.0f}s)   "
-              f"{'OK' if fu_p50 < TARGET_SECONDS else 'OVER TARGET'}")
+        print(f"Follow-up    p50  {follow_up_p50:6.2f}s  (target <{TARGET_SECONDS:.0f}s)   "
+              f"{'OK' if follow_up_ok else 'OVER TARGET'}")
         print(f"Follow-up    p95  {percentile(follow_up_times, 0.95):6.2f}s")
         print(f"Over {TARGET_SECONDS:.0f}s        {fu_over:4d}/{len(follow_up_times)} responses")
     print("=" * 68)
 
-    return 0 if accuracy_ok and latency_ok else 2
+    if not (accuracy_ok and latency_ok and follow_up_ok):
+        failed = ", ".join(
+            name
+            for name, ok in (
+                ("accuracy", accuracy_ok),
+                ("single-turn latency", latency_ok),
+                ("follow-up latency", follow_up_ok),
+            )
+            if not ok
+        )
+        print(f"FAILED: {failed}")
+        return 2
+    return 0
 
 
 async def _warmup(services) -> None:
+    """Exactly what `app.main` warms at startup, so the suite measures what ships.
+
+    The MediaWiki leg is the one that was missing, and it mattered: the
+    not-covered case is the only case here that reaches the live API, so it was
+    paying a TLS handshake that the served application pays once at startup and
+    no user ever sees. That made the suite's slowest case slower than the real
+    thing rather than faster — measured at 4.82s cold against 2.38-2.56s warm.
+    """
     try:
         vector = await services.retriever.embedder.embed_query("warmup")
         for lang in services.retriever.store.indexed_languages() or {"en": 0}:
@@ -405,6 +432,11 @@ async def _warmup(services) -> None:
             await services.retriever.store.query(
                 vector, top_k=1, lang=lang, section_title="Introduction"
             )
+    except Exception:  # noqa: BLE001 - warmup is best effort
+        pass
+
+    try:
+        await services.retriever.wiki.search("Wikipedia", lang="en", limit=1)
     except Exception:  # noqa: BLE001 - warmup is best effort
         pass
 

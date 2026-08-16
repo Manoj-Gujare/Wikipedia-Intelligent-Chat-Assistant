@@ -95,10 +95,14 @@ async def test_generator_refusal_routes_to_live_search():
 
     assert result["sources"] == []
     assert result["used_live_search"] is True
+    # Routing is carried by `articles`, which is what the UI renders as links.
+    # The wording no longer names them: it is written concurrently with the
+    # search that finds them, so it cannot know their titles yet — see
+    # `test_refuse_and_route`. What still matters is that the user is routed
+    # somewhere real and not left with the model's dead-end phrasing.
     assert result["articles"][0]["title"] == "Live result"
-    # The model's own dead-end wording is replaced by something actionable.
     assert "excerpt" not in result["answer"].lower()
-    assert "Live result" in result["answer"]
+    assert result["answer"] != "The indexed Wikipedia articles don't cover that."
 
 
 @pytest.mark.asyncio
@@ -144,7 +148,8 @@ async def test_the_refusal_names_the_subject_that_was_searched_for():
 
     subject, titles, lang = services.refusal_calls[0]
     assert subject == "प्रकाशसंश्लेषण"
-    assert titles == ["Live result"]
+    # No titles: this wording races the search that produces them.
+    assert titles is None
     # The language travels with it, which is the point: the refusal is written
     # in the user's language rather than picked from a table of six that never
     # included Marathi.

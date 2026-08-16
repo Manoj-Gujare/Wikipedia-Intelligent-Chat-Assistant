@@ -49,7 +49,16 @@ async def lifespan(app: FastAPI):
 async def _warmup(services) -> None:
     """Pay the one-off costs at startup instead of on a user's first request.
 
-    That means TLS negotiation to OpenAI and Chroma's lazy index load.
+    That means TLS negotiation to OpenAI and to Wikipedia, plus Chroma's lazy
+    index load.
+
+    The MediaWiki leg matters more than its one line suggests. Only one kind of
+    turn reaches the live API — a question the corpus cannot answer — so that
+    turn used to pay a connection handshake no other turn pays, and it is
+    already the most expensive path in the app. Measured on the benchmark's
+    not-covered case, a cold client cost 4.82s against 2.38-2.56s warm: the
+    difference between missing the 3s budget and meeting it, on the one case
+    that was missing it every single run.
     """
     try:
         vector = await services.retriever.embedder.embed_query("warmup")
@@ -60,6 +69,11 @@ async def _warmup(services) -> None:
             )
     except Exception:  # noqa: BLE001 - warmup is best effort
         logger.warning("Warmup failed; the first request will be slower")
+
+    try:
+        await services.retriever.wiki.search("Wikipedia", lang="en", limit=1)
+    except Exception:  # noqa: BLE001 - Wikipedia being unreachable is not fatal
+        logger.warning("Could not reach Wikipedia at startup; live search may be slow")
 
 
 app = FastAPI(
