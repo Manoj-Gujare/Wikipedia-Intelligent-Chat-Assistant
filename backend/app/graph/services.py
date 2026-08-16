@@ -376,7 +376,7 @@ class GraphServices:
 
         for attempt in range(2):
             try:
-                response = await self.client.chat.completions.create(**payload)
+                response = await self._hedged_decision(payload)
             except Exception:  # noqa: BLE001 - planning is an optimisation, not a gate
                 if attempt == 0:
                     logger.warning("Agent decision call failed; retrying once")
@@ -386,6 +386,58 @@ class GraphServices:
             return parse_tool_calls(response.choices[0].message, message)
 
         return [ToolCall("search_knowledge_base", message)]
+
+    async def _hedged_decision(self, payload: dict) -> Any:
+        """The decision call, with a second copy raced against a slow first.
+
+        This call is the single largest serial cost in a turn (~1.0s at the
+        median) and it is also where the latency target actually gets missed.
+        The misses are not slow *work*: a turn measured at 10.32s end to end
+        spent 10,296ms inside this one call, and the identical node took 1.6s on
+        the very next message. That is a stalled request, not a hard question,
+        and no amount of prompt or model tuning shortens it — retrying only
+        helps if you stop waiting for the original, and waiting is exactly what
+        a plain retry does.
+
+        So past `agent_hedge_after_ms` a second identical request goes out and
+        whichever finishes first wins. Because the payload is `temperature=0`
+        and side-effect free, the two are interchangeable — this is a latency
+        optimisation with no bearing on which tool gets chosen.
+
+        The hedge deadline sits above the median deliberately: at 1.5s against a
+        ~1.0s median it fires on roughly the slowest tenth of calls, so the cost
+        is one extra decision call on the turns that were going to miss the
+        budget anyway, and nothing at all on the turns that were fine.
+        """
+        hedge_after = getattr(self.settings, "agent_hedge_after_ms", 1500)
+        create = self.client.chat.completions.create
+        if not hedge_after or hedge_after <= 0:
+            return await create(**payload)
+
+        first = asyncio.create_task(create(**payload))
+        done, _ = await asyncio.wait({first}, timeout=hedge_after / 1000)
+        if first in done:
+            return first.result()
+
+        logger.info("Agent decision exceeded %dms; hedging a second call", hedge_after)
+        second = asyncio.create_task(create(**payload))
+        racers = {first, second}
+        try:
+            # A hedge is worthless if one racer's failure sinks the turn, so a
+            # loser that raises is discarded and the other is still awaited.
+            while racers:
+                done, racers = await asyncio.wait(
+                    racers, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    if task.exception() is None:
+                        return task.result()
+                    logger.warning("Hedged decision call failed; awaiting the other")
+            return first.result()  # both failed: re-raise the first's exception
+        finally:
+            for task in (first, second):
+                if not task.done():
+                    task.cancel()
 
     # ------------------------------------------------------------ history
 

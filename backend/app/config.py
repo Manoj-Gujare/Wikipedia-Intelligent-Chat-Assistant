@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     agent_hop_deadline_ms: int = 1200
     # Hard ceiling regardless of the clock, so a pathological loop terminates.
     agent_max_hops: int = 2
+    # Race a second decision call once the first has taken this long. The
+    # decision call is the biggest serial cost in a turn and the place the 3s
+    # budget actually gets missed — not by slow work but by stalled requests
+    # (one measured turn spent 10,296ms of its 10,320ms inside this call, while
+    # the next message took 1.6s). A plain retry cannot help, because it keeps
+    # waiting on the stalled request; hedging stops waiting. Set to 0 to
+    # disable. Sits above the ~1.0s median so it fires on the slowest tenth.
+    agent_hedge_after_ms: int = 1500
     # Speculative retrieval races the decision call on messages that are
     # already standalone: retrieval is ~340ms against the call's ~1s, so the
     # result is usually parked and waiting by the time the agent asks for it.
