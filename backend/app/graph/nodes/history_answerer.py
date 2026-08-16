@@ -29,6 +29,7 @@ async def history_answerer(state: ChatState, services) -> dict:
     independently grounded when it was not.
     """
     _discard(state.get("speculative"))
+    _discard(state.get("speculative_answer"))
     history = services.history(state["session_id"])
     lang = state.get("lang", "en")
 
@@ -42,6 +43,7 @@ async def history_answerer(state: ChatState, services) -> dict:
             "sources": [],
             "articles": [],
             "speculative": None,
+        "speculative_answer": None,
             "messages": [AIMessage(content=answer)],
         }
 
@@ -65,5 +67,6 @@ async def history_answerer(state: ChatState, services) -> dict:
         "sources": [],
         "articles": [],
         "speculative": None,
+        "speculative_answer": None,
         "messages": [AIMessage(content=answer)],
     }

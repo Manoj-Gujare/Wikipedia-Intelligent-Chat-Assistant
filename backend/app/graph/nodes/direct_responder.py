@@ -21,6 +21,7 @@ async def direct_responder(state: ChatState, services) -> dict:
     whole point of this branch is that its results were never wanted.
     """
     _discard(state.get("speculative"))
+    _discard(state.get("speculative_answer"))
     answer = state.get("direct_reply") or ""
 
     services.emit_token(answer)
@@ -31,5 +32,6 @@ async def direct_responder(state: ChatState, services) -> dict:
         "articles": [],
         "retrieved_chunks": [],
         "speculative": None,
+        "speculative_answer": None,
         "messages": [AIMessage(content=answer)],
     }

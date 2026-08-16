@@ -15,6 +15,7 @@ from ..references import (
     looks_self_contained,
 )
 from ..state import ChatState
+from .speculation import speculate_answer
 from .timing import timed
 
 logger = logging.getLogger(__name__)
@@ -48,11 +49,16 @@ async def agent(state: ChatState, services) -> dict:
     if speculative is None and hops == 0 and not state.get("tool_calls"):
         guess = _speculation_query(message, history, services)
         if guess:
-            speculative = asyncio.create_task(
-                services.retrieve(guess, lang=state.get("lang", "en"))
-            )
+            lang = state.get("lang", "en")
+            speculative = asyncio.create_task(services.retrieve(guess, lang=lang))
             updates["speculative"] = speculative
             updates["speculative_query"] = guess
+
+            # And, underneath the same decision call, the answer itself.
+            if _may_speculate_answer(message, services):
+                updates["speculative_answer"] = asyncio.create_task(
+                    speculate_answer(speculative, services, message, lang, history)
+                )
 
     calls = await services.decide_tools(message, history, state.get("observations"))
     call = calls[0]
@@ -144,6 +150,26 @@ def _resolve_against_current_subject(message: str, query: str, history: list) ->
 
     logger.info("Agent %s for %r; stitching to %r", reason, message, previous)
     return f"{previous} {message}"
+
+
+def _may_speculate_answer(message: str, services) -> bool:
+    """Whether the answer can be written before the decision comes back.
+
+    Only when the generator's prompt does not depend on the decision. That is a
+    sharper condition than it looks: `generator._question_for_generator` phrases
+    the answer around the *resolved* query for a referential message, and the
+    resolved query is the decision's own output. Speculating on those would
+    write the answer to a question the agent had not yet asked — and the whole
+    guarantee here is that a flushed answer is the answer the ordinary path
+    would have produced.
+
+    For everything else the generator uses the raw message, which is known
+    before the decision starts, so the two prompts are identical by
+    construction.
+    """
+    if not getattr(services.settings, "agent_speculative_generation", True):
+        return False
+    return not _is_referential(message)
 
 
 def _speculation_query(message: str, history: list, services) -> str | None:

@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # result is usually parked and waiting by the time the agent asks for it.
     # Disable to trade latency back for the embedding calls it sometimes wastes.
     agent_speculative_retrieval: bool = True
+    # Write the answer under the decision call too, not just the search. The
+    # two model calls in a turn are only logically serial for the minority of
+    # turns that route somewhere other than the knowledge base; for the rest
+    # the answer can be written while the decision is still being made, then
+    # flushed once it is confirmed. Costs a discarded generation on the turns
+    # that route elsewhere, which is the price of not knowing in advance which
+    # kind of turn this is. Set to 0/false to go back to strictly serial.
+    agent_speculative_generation: bool = True
     # A speculative result is reused only when the message we searched already
     # contained this much of the query the agent asked for. Containment, not
     # symmetric overlap: the agent's usual edit is to strip filler ("What is

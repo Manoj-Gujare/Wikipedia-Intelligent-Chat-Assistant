@@ -33,6 +33,7 @@ class StubSettings:
     agent_hop_deadline_ms = 1200
     agent_max_hops = 2
     agent_speculative_retrieval = True
+    agent_speculative_generation = True
     agent_speculation_reuse_threshold = 0.6
 
 
@@ -64,6 +65,9 @@ class StubServices:
         self.generate_calls = 0
         self.decide_calls: list[list[dict]] = []
         self.tokens: list[str] = []
+        # Every prompt `generate_stream` was handed, so a test can assert the
+        # speculative and ordinary prompts are byte-identical.
+        self.generated_prompts: list[list[dict]] = []
         # A list cycles one decision per hop; a bare ToolCall repeats forever.
         self.tool_call = tool_call or ToolCall("search_knowledge_base", "rewritten query")
 
@@ -92,8 +96,13 @@ class StubServices:
             return [self.tool_call[index]]
         return [self.tool_call]
 
-    async def generate_stream(self, messages):
+    async def generate_stream(self, messages, emit: bool = True):
         self.generate_calls += 1
+        # Mirrors production: a buffered generation emits nothing. Tests assert
+        # on `tokens` to prove a speculative answer stayed off the wire.
+        self.generated_prompts.append(messages)
+        if emit:
+            self.emit_token(self._answer)
         return self._answer
 
     async def fallback_articles(self, query, lang):

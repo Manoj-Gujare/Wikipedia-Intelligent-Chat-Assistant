@@ -11,6 +11,7 @@ from ...core.prompts import SYSTEM_PROMPT, build_context_block, language_name
 from ...core.sources import build_sources
 from ..references import _is_referential
 from ..state import ChatState
+from .speculation import _discard, collect
 from .timing import timed
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,33 @@ def _search_query(state: ChatState) -> str:
     return state.get("tool_query") or state.get("standalone_query") or state["question"]
 
 
+def build_generation_messages(question: str, lang: str, hits: list, history: list) -> list[dict]:
+    """The grounded-answer prompt.
+
+    Extracted so the speculative generation and the real one are built by the
+    same code rather than by two implementations that have to be kept in step.
+    A speculative answer is only ever flushed when it was produced from this
+    function with the same arguments the ordinary path would have passed, which
+    is what makes "identical to the non-speculative path" checkable instead of
+    merely intended.
+    """
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": SYSTEM_PROMPT.format(language_name=language_name(lang))}
+    ]
+    for turn in history[-6:]:
+        messages.append({"role": turn.role, "content": turn.content})
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"Wikipedia excerpts:\n\n{build_context_block(hits)}\n\n"
+                f"---\n\nQuestion: {question}"
+            ),
+        }
+    )
+    return messages
+
+
 @timed("generator")
 async def generator(state: ChatState, services) -> dict:
     """Grounded generation with citations, streamed token by token."""
@@ -69,6 +97,10 @@ async def generator(state: ChatState, services) -> dict:
         # and named by the agent's query, not the user's sentence — see
         # `_search_query`. The model is still not asked to *answer*, only to
         # word the refusal in the user's language.
+        #
+        # Any speculative answer is void here by definition: it was written
+        # from chunks this turn has just established it does not have.
+        _discard(state.get("speculative_answer"))
         search = _search_query(state)
         parked = state.get("articles")
         if parked:
@@ -85,25 +117,12 @@ async def generator(state: ChatState, services) -> dict:
             "sources": [],
             "articles": articles,
             "used_live_search": True,
+            "speculative_answer": None,
+            "speculative_answer_used": False,
             "messages": [AIMessage(content=answer)],
         }
 
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(language_name=language_name(lang))}
-    ]
-    for turn in history[-6:]:
-        messages.append({"role": turn.role, "content": turn.content})
-    messages.append(
-        {
-            "role": "user",
-            "content": (
-                f"Wikipedia excerpts:\n\n{build_context_block(hits)}\n\n"
-                f"---\n\nQuestion: {query}"
-            ),
-        }
-    )
-
-    answer = await services.generate_stream(messages)
+    answer, flushed = await _answer_text(state, services, query, lang, hits, history)
 
     # Before binding citations: a sentence whose cited chunk does not support it
     # is worse than no answer, because the citation makes it look checked. Live
@@ -133,5 +152,56 @@ async def generator(state: ChatState, services) -> dict:
         "sources": [s.model_dump() for s in sources],
         "articles": articles,
         "used_live_search": used_live,
+        "speculative_answer": None,
+        "speculative_answer_used": flushed,
         "messages": [AIMessage(content=answer)],
     }
+
+
+async def _answer_text(
+    state: ChatState, services, query: str, lang: str, hits: list, history: list
+) -> tuple[str, bool]:
+    """The answer, flushed from the speculative generation when it is valid.
+
+    Three conditions have to hold before a buffered answer reaches anyone, and
+    each rules out a different way of being wrong:
+
+    * `speculation_hit` — the decision confirmed the knowledge base *and* the
+      executor served the parked search. Without it the agent went somewhere
+      else, or rewrote the query into a different search.
+    * `parked.hits is hits` — the answer was written from the very chunk list
+      the turn ended up with. Identity, because a reused result is the same
+      object; equality would pass for two different searches that happened to
+      tie.
+    * a non-empty `text` — a partial or empty buffer is never flushed, only
+      completed ones.
+
+    The buffer is awaited only once the first condition already holds, so the
+    discard path never pays for a generation it has decided not to use: it
+    cancels and runs the ordinary call instead.
+
+    Returns the answer and whether it came from the buffer.
+    """
+    parked_task = state.get("speculative_answer")
+
+    if parked_task is not None:
+        if state.get("speculation_hit"):
+            parked = await collect(parked_task)
+            if parked is not None and parked.hits is hits and parked.text:
+                logger.info(
+                    "speculative answer flushed (%d chars); the decision call "
+                    "and the generation overlapped",
+                    len(parked.text),
+                )
+                # Emitted whole. Nothing went to the client while it was
+                # speculative, so this is the first the stream hears of it.
+                services.emit_token(parked.text)
+                return parked.text, True
+            logger.info("speculative answer completed but did not match; discarding")
+        else:
+            logger.info("speculative answer discarded: the turn did not confirm it")
+            _discard(parked_task)
+
+    return await services.generate_stream(
+        build_generation_messages(query, lang, hits, history)
+    ), False

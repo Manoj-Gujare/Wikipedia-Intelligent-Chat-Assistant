@@ -42,10 +42,18 @@ async def tool_executor(state: ChatState, services) -> dict:
     lang = state.get("lang", "en")
 
     if tool == LIVE_SEARCH:
+        # Live grounding replaces the indexed chunks outright, so a speculative
+        # answer written from those chunks can never be flushed.
         _discard(state.get("speculative"))
+        _discard(state.get("speculative_answer"))
         result = await services.search_wikipedia_live(query, lang=lang)
         shaped = _shape(result, lang, live=True)
-        return {**shaped, "speculative": None, "observations": _observe(tool, query, shaped)}
+        return {
+            **shaped,
+            "speculative": None,
+            "speculative_answer": None,
+            "observations": _observe(tool, query, shaped),
+        }
 
     result, reused = await _kb_search(state, services, query, lang)
     shaped = _shape(result, lang, live=False)
@@ -77,14 +85,20 @@ async def tool_executor(state: ChatState, services) -> dict:
         logger.info(
             "ambiguous entity %r -> %d candidates (%s)", query, len(candidates), kind
         )
+        # The turn ends at the clarification node, which writes no answer.
+        _discard(state.get("speculative_answer"))
         return {
             "intent": "ambiguous",
             "retrieved_chunks": shaped["retrieved_chunks"],
             "disambiguation_kind": kind,
             "disambiguation_candidates": candidates,
             "speculative": None,
+            "speculative_answer": None,
         }
 
+    # `speculative_answer` is deliberately *not* cleared here: this is the path
+    # to the generator, and the generator is the only node that may decide
+    # whether the buffer is flushed or thrown away.
     return {
         **shaped,
         "speculation_hit": reused,

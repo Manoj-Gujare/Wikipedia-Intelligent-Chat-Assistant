@@ -9,6 +9,7 @@ or grounding behave.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -99,8 +100,19 @@ class GraphServices:
         if writer:
             writer({"type": "token", "text": text})
 
-    async def generate_stream(self, messages: list[dict[str, str]]) -> str:
-        """Stream a grounded answer, emitting tokens as they arrive."""
+    async def generate_stream(
+        self, messages: list[dict[str, str]], emit: bool = True
+    ) -> str:
+        """Stream a grounded answer, emitting tokens as they arrive.
+
+        `emit=False` buffers instead. A speculative generation is produced
+        before anyone knows whether it will be used, so its tokens must not
+        reach the client until the decision confirms them — see
+        `nodes.speculation.speculate_answer`. Everything else about the call is
+        identical, deliberately: the speculative answer has to be the same
+        answer the ordinary path would have produced, or flushing it would be a
+        change in behaviour rather than a change in timing.
+        """
         stream = await self.client.chat.completions.create(
             model=self.settings.chat_model,
             messages=messages,
@@ -115,13 +127,14 @@ class GraphServices:
             delta = event.choices[0].delta.content
             if delta:
                 parts.append(delta)
-                self.emit_token(delta)
+                if emit:
+                    self.emit_token(delta)
         return "".join(parts).strip()
 
     # ------------------------------------------------------------- refusals
 
     async def compose_refusal(
-        self, subject: str, titles: list[str], lang: str = "en"
+        self, subject: str, titles: list[str] | None, lang: str = "en"
     ) -> str:
         """Say that nothing was found, in the user's language.
 

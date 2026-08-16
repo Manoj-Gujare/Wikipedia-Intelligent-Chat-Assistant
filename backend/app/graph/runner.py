@@ -53,6 +53,8 @@ def _initial_state(message: str, session_id: str, lang: str) -> ChatState:
         "speculative": None,
         "speculative_query": None,
         "speculation_hit": False,
+        "speculative_answer": None,
+        "speculative_answer_used": None,
     }
 
 
@@ -83,6 +85,7 @@ def _to_response(
         tools=[ToolCallTrace(**c) for c in state.get("tool_calls") or []],
         hops=state.get("hops", 0),
         speculation_hit=bool(state.get("speculation_hit")),
+        speculative_answer_used=state.get("speculative_answer_used"),
     )
     return ChatResponse(
         conversation_id=session_id,
@@ -242,11 +245,18 @@ def _log_path(state: dict, total_ms: int) -> None:
     # turn pays the decision now, so this is the whole latency design in one
     # field: `hit` means the search was already done when the agent chose.
     spec = "hit" if state.get("speculation_hit") else "-"
+    # Whether the answer written under the decision call was used or thrown
+    # away. This is the field that shows the real-traffic split between the two
+    # — the cost of speculating on generation is entirely in the `discard`
+    # column, so it should not have to be inferred from spend.
+    used = state.get("speculative_answer_used")
+    gen = {True: "flush", False: "discard", None: "-"}[used]
     logger.info(
-        "intent=%-12s tools=%-24s spec=%-3s total=%5dms  path: %s",
+        "intent=%-12s tools=%-24s spec=%-3s gen=%-7s total=%5dms  path: %s",
         state.get("intent", "?"),
         tools,
         spec,
+        gen,
         total_ms,
         path,
     )

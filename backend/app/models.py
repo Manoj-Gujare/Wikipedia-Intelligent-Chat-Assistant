@@ -71,6 +71,12 @@ class AgentTrace(BaseModel):
     tools: list[ToolCallTrace] = []
     hops: int = 0
     speculation_hit: bool = False
+    # Whether the answer written under the decision call was flushed to the
+    # client or thrown away. `None` means none was written — a referential
+    # message, or a turn that never reached the generator. The discarded share
+    # is exactly what speculative generation costs, so it is reported rather
+    # than inferred from the bill.
+    speculative_answer_used: bool | None = None
 
 
 class ChatResponse(BaseModel):

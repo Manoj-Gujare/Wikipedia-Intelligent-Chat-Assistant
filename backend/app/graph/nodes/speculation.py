@@ -13,13 +13,95 @@ retrieval.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
+from dataclasses import dataclass
 
 from ..state import ChatState
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class SpeculativeAnswer:
+    """A complete, unflushed answer and the chunks it was written from.
+
+    `hits` is carried so the generator can prove the answer was written from
+    the very chunks the confirmed path ended up with — identity, not equality,
+    because the reused result is the same object. Without that check a
+    speculative answer could be flushed for a retrieval it was not based on,
+    which is the one failure this whole mechanism must not have.
+    """
+
+    hits: list
+    text: str
+
+
+async def speculate_answer(retrieval_task, services, question, lang, history):
+    """Write the answer under the decision call, buffered rather than streamed.
+
+    The decision call and the answer are the two serial round trips in a turn,
+    and each has a floor of roughly 0.7s. They are only *logically* serial for
+    the 22% of turns that route somewhere other than the knowledge base — for
+    the rest, the answer could have been written while the decision was still
+    being made. This writes it, and the generator decides afterwards whether
+    anyone gets to see it.
+
+    Retrieval is still upstream of generation, so this cannot start at t=0: it
+    waits on the parked search, which contains an embedding round trip of its
+    own. The saving is therefore the decision call *minus* retrieval, not the
+    decision call outright.
+
+    Returns None whenever the speculation is unusable — no chunks, an empty
+    generation, or any failure at all. A speculative answer must never be able
+    to break a turn that would otherwise have succeeded, so every error here
+    ends as "no speculation" and the ordinary path runs.
+    """
+    # Local import: `generator` imports `_discard` from this module, so a
+    # module-level import here would close the cycle.
+    from .generator import build_generation_messages
+
+    try:
+        result = await retrieval_task
+        hits = result.hits
+        if not hits:
+            return None
+        text = await services.generate_stream(
+            build_generation_messages(question, lang, hits, history), emit=False
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - speculation must never fail the turn
+        logger.warning("Speculative generation failed; the ordinary path will run")
+        return None
+
+    return SpeculativeAnswer(hits=hits, text=text) if text else None
+
+
+async def collect(task):
+    """Await a speculative answer, or None if it did not produce one.
+
+    Only called once the cheap preconditions already hold, so waiting here is
+    waiting for something we intend to use — never for something we are about
+    to throw away.
+
+    `CancelledError` is deliberately not caught. Catching it was tried and is
+    wrong twice over: it swallows the cancellation of the *turn* — a
+    disconnected client would leave the graph running with nowhere to send the
+    answer — and it cannot even tell the two cases apart, because cancelling a
+    task that is awaiting another task cancels the awaited one too (it is the
+    outer task's `_fut_waiter`), so `task.cancelled()` reads True either way.
+    The honest semantics are the simple ones: if the turn is cancelled while
+    waiting for the answer it means to use, the turn is over.
+    """
+    if task is None:
+        return None
+    try:
+        return await task
+    except Exception:  # noqa: BLE001 - a failed speculation is just no speculation
+        return None
 
 def _discard(task) -> None:
     """Cancel an unused speculative task and swallow whatever it was doing.

@@ -81,6 +81,14 @@ class ChatState(TypedDict, total=False):
     # state stays in-process for the life of one turn.
     speculative: Optional[object]
     speculative_query: Optional[str]
+    # An in-flight grounded generation, written from the parked search while the
+    # decision call is still running. Buffered, never streamed: nothing reaches
+    # the client until the decision confirms the turn was going to the knowledge
+    # base after all. Discarded outright otherwise.
+    speculative_answer: Optional[object]
+    # Whether that buffer was flushed or thrown away, so the real-traffic split
+    # between the two is observable rather than assumed.
+    speculative_answer_used: Optional[bool]
     # True when the executor served the agent from the parked speculative
     # result. Pinned by tests: the whole latency argument rests on this hitting.
     speculation_hit: bool
