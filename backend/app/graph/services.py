@@ -141,27 +141,45 @@ class GraphServices:
         arrives in the wrong language is a poor answer; a turn that dies because
         its apology could not be generated is no answer at all.
         """
-        listed = ", ".join(titles[:3])
-        instruction = (
-            f"The user asked about: {subject}\n\n"
-            + (
+        if titles is None:
+            # Titles unknown *yet*: the article search is still in flight and
+            # this call is deliberately racing it (see `refuse_and_route`). The
+            # wording therefore points at the Sources list rather than naming
+            # articles, which is the one phrasing that is writable before the
+            # search returns. The UI renders those articles as links regardless,
+            # so nothing is lost but the titles appearing twice.
+            detail = (
+                "Their knowledge base has nothing on it. Tell them so, and tell "
+                "them the related Wikipedia articles are listed under Sources "
+                "and can be added to their knowledge base for a cited answer. "
+                "Do not invent or name any article titles."
+            )
+        elif titles:
+            detail = (
                 f"Their personal knowledge base has nothing on it, but these "
-                f"Wikipedia articles exist: {listed}. Tell them so, name those "
-                f"articles, and mention they are listed under Sources and can be "
-                f"added to their knowledge base for a cited answer."
-                if titles
-                else "It was found neither in their knowledge base nor on "
+                f"Wikipedia articles exist: {', '.join(titles[:3])}. Tell them so, "
+                f"name those articles, and mention they are listed under Sources "
+                f"and can be added to their knowledge base for a cited answer."
+            )
+        else:
+            detail = (
+                "It was found neither in their knowledge base nor on "
                 "Wikipedia. Tell them so and suggest a more specific name or "
                 "spelling."
             )
-        )
+        instruction = f"The user asked about: {subject}\n\n{detail}"
+        # Length is most of the latency budget on this path. A refusal states no
+        # facts, so a third sentence adds nothing the Sources list does not
+        # already show — and this is the one route where generation rather than
+        # retrieval is what pushes a turn towards 3s.
         messages = [
             {
                 "role": "system",
                 "content": (
                     "You write the message a Wikipedia research assistant shows "
-                    "when it cannot answer. Two or three sentences, plain and "
-                    "helpful, no emoji, no apology beyond a brief one.\n"
+                    "when it cannot answer. One or two sentences and at most 30 "
+                    "words, plain and helpful, no emoji, no apology beyond a "
+                    "brief one.\n"
                     f"Write entirely in {language_name(lang)}, including the "
                     "connecting words around any article titles — but keep "
                     "article titles exactly as given, never translated.\n"
@@ -178,9 +196,41 @@ class GraphServices:
             answer = await self.generate_stream(messages)
         except Exception:  # noqa: BLE001 - a failed apology must not fail the turn
             logger.warning("Could not generate a refusal in %r; using the template", lang)
-            return compose_not_covered(subject, titles, lang)
+            return compose_not_covered(subject, titles or [], lang)
 
-        return answer or compose_not_covered(subject, titles, lang)
+        return answer or compose_not_covered(subject, titles or [], lang)
+
+    async def refuse_and_route(
+        self, subject: str, lang: str = "en"
+    ) -> tuple[list[dict], str]:
+        """Find the articles to route to *while* the refusal is being written.
+
+        The not-covered path was the only case that missed the 3s budget
+        reliably rather than randomly — measured at 3.50s, 3.71s and 3.82s on
+        three separate benchmark runs, where every other case is dominated by
+        run-to-run API variance. The cause was structural, not luck: a live
+        MediaWiki search (~0.6s) and a refusal call (~1.0s) ran in series
+        because the refusal named the articles the search returned, so it could
+        not start until the search finished.
+
+        Breaking that dependency is what makes them concurrent. The racing
+        wording points at the Sources list instead of naming titles inline,
+        which costs nothing the user can see — the articles are returned in
+        `articles` and rendered as links either way.
+
+        The two orderings that remain are handled explicitly: a search that
+        comes back empty leaves the generic wording promising a list that does
+        not exist, so that rare case is re-worded (and pays the serial cost it
+        used to pay every time), and a failure in either is left to the caller's
+        existing fall-backs.
+        """
+        articles_task = asyncio.create_task(self.fallback_articles(subject, lang))
+        refusal_task = asyncio.create_task(self.compose_refusal(subject, None, lang))
+        articles, answer = await asyncio.gather(articles_task, refusal_task)
+
+        if not articles:
+            answer = await self.compose_refusal(subject, [], lang)
+        return articles, answer
 
     # ------------------------------------------------------------ retrieval
 

@@ -104,10 +104,22 @@ class StubServices:
     async def compose_refusal(self, subject, titles, lang="en"):
         # Counted apart from `generate_calls`: wording a refusal is not the same
         # event as generating an answer, and tests assert on both.
-        self.refusal_calls.append((subject, list(titles), lang))
-        answer = f"[no {subject}] {', '.join(titles)}"
+        # `titles=None` means the article search is still in flight and this
+        # wording is racing it, so it must not name any article.
+        self.refusal_calls.append((subject, None if titles is None else list(titles), lang))
+        answer = f"[no {subject}] {', '.join(titles or [])}"
         self.emit_token(answer)
         return answer
+
+    async def refuse_and_route(self, subject, lang="en"):
+        """Mirrors production: both calls start together, not one after the other."""
+        articles, answer = await asyncio.gather(
+            self.fallback_articles(subject, lang),
+            self.compose_refusal(subject, None, lang),
+        )
+        if not articles:
+            answer = await self.compose_refusal(subject, [], lang)
+        return articles, answer
 
     @staticmethod
     def article_links(hits, sources):

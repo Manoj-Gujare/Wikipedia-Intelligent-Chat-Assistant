@@ -70,10 +70,16 @@ async def generator(state: ChatState, services) -> dict:
         # `_search_query`. The model is still not asked to *answer*, only to
         # word the refusal in the user's language.
         search = _search_query(state)
-        articles = state.get("articles") or await services.fallback_articles(search, lang)
-        answer = await services.compose_refusal(
-            search, [a["title"] for a in articles], lang
-        )
+        parked = state.get("articles")
+        if parked:
+            # Already routed by an earlier node; only the wording is missing.
+            articles = parked
+            answer = await services.compose_refusal(
+                search, [a["title"] for a in articles], lang
+            )
+        else:
+            # Word the refusal while the article search runs, not after it.
+            articles, answer = await services.refuse_and_route(search, lang)
         return {
             "answer": answer,
             "sources": [],
@@ -115,12 +121,11 @@ async def generator(state: ChatState, services) -> dict:
     else:
         # No citations means the model refused: the retrieved chunks were noise,
         # so route from live search rather than linking them — and replace the
-        # model's own wording, which tends to be an unhelpful dead end.
+        # model's own wording, which tends to be an unhelpful dead end. Same
+        # concurrency as the no-hits path above; this branch has already paid
+        # for a full generation, so it needs the saving more, not less.
         search = _search_query(state)
-        articles = await services.fallback_articles(search, lang)
-        answer = await services.compose_refusal(
-            search, [a["title"] for a in articles], lang
-        )
+        articles, answer = await services.refuse_and_route(search, lang)
         used_live = True
 
     return {
