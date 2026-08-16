@@ -8,7 +8,12 @@ import re
 
 from ...core.agent_tools import DIRECT_REPLY, HISTORY_ANSWER
 from ..history import substantive_turns
-from ..references import _is_referential, _terms, looks_self_contained
+from ..references import (
+    _is_referential,
+    _terms,
+    contains_pronoun,
+    looks_self_contained,
+)
 from ..state import ChatState
 from .timing import timed
 
@@ -112,10 +117,31 @@ def _resolve_against_current_subject(message: str, query: str, history: list) ->
         return query
 
     supplied = _terms(query) - _terms(message)
-    if supplied and supplied & _terms(previous):
-        return query
+    if supplied:
+        if supplied & _terms(previous):
+            return query
+        reason = "named a stale subject"
+    else:
+        # The agent added nothing to the message. That has two very different
+        # causes and only one of them wants stitching.
+        #
+        # "what about his wife?" -> "his wife" genuinely resolved nothing: the
+        # pronoun still points outside the message, so the previous question
+        # has to be grafted on.
+        #
+        # "what about black hole" -> "black hole" added nothing because there
+        # was nothing to add — the message already named its subject, and the
+        # agent simply stripped the opener. Stitching here is not a backstop
+        # but a corruption: observed in the running app, a Tesla refusal
+        # followed by "what about black hole" searched for *"What is the
+        # current stock price of Tesla? what about black hole"* and produced an
+        # answer that dutifully addressed both.
+        #
+        # A referential pronoun is what separates them.
+        if not contains_pronoun(message):
+            return query
+        reason = "resolved nothing"
 
-    reason = "resolved nothing" if not supplied else "named a stale subject"
     logger.info("Agent %s for %r; stitching to %r", reason, message, previous)
     return f"{previous} {message}"
 

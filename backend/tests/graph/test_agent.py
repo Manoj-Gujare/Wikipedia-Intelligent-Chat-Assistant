@@ -52,6 +52,52 @@ async def test_an_unresolved_referential_message_is_stitched_to_the_current_subj
 
 
 @pytest.mark.asyncio
+async def test_a_topic_switch_that_opens_referentially_is_not_stitched():
+    """The mirror image, and a real regression from the running UI.
+
+    "what about black hole" opens like a follow-up but names its own subject,
+    so the agent adds nothing when it answers "black hole" — not because it
+    failed to resolve a reference, but because there was no reference to
+    resolve. The old backstop read those two cases as one and grafted the
+    previous question on, so after a Tesla refusal this searched for *"What is
+    the current stock price of Tesla? what about black hole"* and answered both
+    halves in one paragraph.
+    """
+    services = StubServices(
+        history=[
+            Turn("user", "What is the current stock price of Tesla?"),
+            Turn("assistant", "The indexed articles don't cover that."),
+        ],
+        tool_call=ToolCall("search_knowledge_base", "black hole"),
+    )
+
+    result = await agent(_state(question="what about black hole"), services)
+
+    assert result["tool_query"] == "black hole"
+
+
+@pytest.mark.asyncio
+async def test_a_pronoun_the_agent_left_unresolved_is_still_stitched():
+    """The distinction has to survive: a pronoun really does need the history.
+
+    Same shape as the case above — the agent supplies nothing beyond the
+    message — but here that is a failure to resolve, because `his` points
+    outside the message and cannot be searched as written.
+    """
+    services = StubServices(
+        history=[
+            Turn("user", "Who was Albert Einstein?"),
+            Turn("assistant", "A physicist."),
+        ],
+        tool_call=ToolCall("search_knowledge_base", "his wife"),
+    )
+
+    result = await agent(_state(question="what about his wife?"), services)
+
+    assert result["tool_query"] == "Who was Albert Einstein? what about his wife?"
+
+
+@pytest.mark.asyncio
 async def test_a_rewrite_to_a_stale_subject_is_overridden():
     """The dangerous case: confidently the wrong person.
 

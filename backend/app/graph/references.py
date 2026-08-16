@@ -49,6 +49,24 @@ def _is_referential(message: str) -> bool:
     return any(word in _REFERENTIAL for word in re.findall(r"[a-z']+", lowered))
 
 
+def contains_pronoun(message: str) -> bool:
+    """Whether the message has a word that *only* the history can resolve.
+
+    The distinction this draws is between the two ways a message can look
+    referential. "what about his wife?" cannot be searched as written — `his`
+    points outside the message. "what about black hole" opens the same way but
+    names its own subject, and needs nothing from the turn before it.
+
+    `_is_referential` deliberately treats both as referential, because for
+    speculation the opener alone is reason enough to be careful. The
+    subject-corroboration backstop needs the sharper question, because its
+    remedy is to graft the previous question on — help for the first message
+    and corruption for the second.
+    """
+    lowered = (message or "").strip().lower()
+    return any(word in _REFERENTIAL for word in re.findall(r"[a-z']+", lowered))
+
+
 def looks_self_contained(message: str) -> bool:
     """Whether a message stands on its own without the conversation history.
 
